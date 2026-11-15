@@ -95,10 +95,25 @@
       <div class="hint">
         Expected feel with Default profile: ~100px per notch, ~400ms pulse
         decay, acceleration when notches are close together. Nested box below
-        should smooth-scroll first; at its edges the page continues.
+        should smooth-scroll first; at its edges the page continues. TOC links
+        below should <strong>animate</strong> to sections (not native jump),
+        clearing the sticky header.
       </div>
 
-      <section class="section">
+      <section class="section" id="contents">
+        <h2>Contents (anchor test)</h2>
+        <nav aria-label="Table of contents">
+          <ol>
+            <li><a href="#nested-section">Nested overflow</a></li>
+            <li><a href="#long-page">Long page</a></li>
+            <li><a href="#mid-anchor">Mid-page anchor</a></li>
+            <li><a href="#bottom-anchor">Bottom anchor</a></li>
+            <li><a href="#top">Back to top</a></li>
+          </ol>
+        </nav>
+      </section>
+
+      <section class="section" id="nested-section">
         <h2>Nested overflow</h2>
         <div class="nested" id="nested">
           <p>Nested scrollable — wheel here should animate this box.</p>
@@ -124,7 +139,7 @@
         </div>
       </section>
 
-      <section class="section tall">
+      <section class="section tall" id="long-page">
         <h2>Long page</h2>
         <p>
           Scroll the page with the mouse wheel. With the extension enabled you
@@ -134,13 +149,24 @@
           const host = document.currentScript.parentElement;
           for (let i = 1; i <= 60; i++) {
             const p = document.createElement("p");
-            p.textContent =
-              "Paragraph " +
-              i +
-              " — filler for a long document so wheel impulses can accumulate and decelerate.";
+            if (i === 25) {
+              p.id = "mid-anchor";
+              p.innerHTML =
+                "<strong>Mid-page anchor</strong> — TOC should pulse-scroll here.";
+            } else if (i === 55) {
+              p.id = "bottom-anchor";
+              p.innerHTML =
+                "<strong>Bottom anchor</strong> — another hash target.";
+            } else {
+              p.textContent =
+                "Paragraph " +
+                i +
+                " — filler for a long document so wheel impulses can accumulate and decelerate.";
+            }
             host.appendChild(p);
           }
         </script>
+        <p><a href="#contents">Back to Contents</a></p>
       </section>
     </main>
   </body>

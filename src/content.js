@@ -39,6 +39,9 @@
   let middleDown = false;
   let middleLast = null;
   let pulseNormalize = 1;
+  let animGen = 0;
+  let ignoreHashChange = false;
+  let lastHashNav = 0;
 
   const KEY = {
     left: 37,
@@ -206,10 +209,21 @@
     if (dy) elem.scrollTop += dy;
   }
 
-  function scrollArray(elem, left, top) {
+  function cancelAnimation() {
+    que = [];
+    animGen += 1;
+    pending = false;
+  }
+
+  function scrollArray(elem, left, top, opts) {
+    const accelerate = !opts || opts.accelerate !== false;
+    if (opts && opts.replace) {
+      cancelAnimation();
+    }
+
     directionCheck(left, top);
 
-    if (options.accelerationMax > 1) {
+    if (accelerate && options.accelerationMax > 1) {
       const elapsed = now() - lastScroll;
       if (elapsed < options.accelerationDelta && elapsed > 0) {
         let factor = (1 + 50 / elapsed) / 2;
@@ -220,8 +234,11 @@
         }
       }
       lastScroll = now();
+    } else {
+      lastScroll = now();
     }
 
+    const gen = animGen;
     que.push({
       x: left,
       y: top,
@@ -236,6 +253,10 @@
     // Continuous rAF impulse loop — new wheel notches push onto `que`
     // while this runs, so motion accumulates like classic SmoothScroll.
     const step = () => {
+      if (gen !== animGen) {
+        pending = false;
+        return;
+      }
       const tNow = now();
       let dx = 0;
       let dy = 0;
@@ -262,6 +283,11 @@
 
       applyScroll(elem, dx, dy);
 
+      if (gen !== animGen) {
+        pending = false;
+        return;
+      }
+
       if (que.length) {
         requestFrame(step);
       } else {
@@ -270,6 +296,263 @@
     };
 
     requestFrame(step);
+  }
+
+  function parsePx(value) {
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function stickyTopOffset(scroller) {
+    let pad = 0;
+    try {
+      const host = isWindowScroller(scroller)
+        ? document.documentElement
+        : scroller;
+      pad = Math.max(pad, parsePx(getComputedStyle(host).scrollPaddingTop));
+    } catch (_) {
+      /* ignore */
+    }
+
+    if (!isWindowScroller(scroller)) return pad;
+
+    // Heuristic: fixed/sticky chrome sitting at the top of the viewport
+    try {
+      const nodes = document.body
+        ? document.body.querySelectorAll(
+            "header, nav, [class*='sticky'], [class*='Sticky'], [class*='header'], [class*='Header'], [class*='navbar'], [class*='NavBar']"
+          )
+        : [];
+      let maxBottom = 0;
+      const limit = Math.min(nodes.length, 40);
+      for (let i = 0; i < limit; i++) {
+        const el = nodes[i];
+        const st = getComputedStyle(el);
+        if (st.position !== "fixed" && st.position !== "sticky") continue;
+        if (st.visibility === "hidden" || st.display === "none") continue;
+        const r = el.getBoundingClientRect();
+        if (r.height <= 0 || r.width <= 0) continue;
+        if (r.top > 8) continue;
+        if (r.bottom <= 0) continue;
+        if (r.height > window.innerHeight * 0.45) continue;
+        if (r.bottom > maxBottom) maxBottom = r.bottom;
+      }
+      pad = Math.max(pad, maxBottom);
+    } catch (_) {
+      /* ignore */
+    }
+    return pad;
+  }
+
+  function currentScroll(scroller) {
+    if (isWindowScroller(scroller)) {
+      return {
+        x: window.scrollX || window.pageXOffset || 0,
+        y: window.scrollY || window.pageYOffset || 0,
+      };
+    }
+    return { x: scroller.scrollLeft, y: scroller.scrollTop };
+  }
+
+  function targetOffsetInScroller(scroller, el) {
+    const cur = currentScroll(scroller);
+    if (!el) {
+      return { x: 0, y: 0, curX: cur.x, curY: cur.y };
+    }
+
+    const marginTop = parsePx(getComputedStyle(el).scrollMarginTop);
+    const marginLeft = parsePx(getComputedStyle(el).scrollMarginLeft);
+    const padTop = stickyTopOffset(scroller);
+    const rect = el.getBoundingClientRect();
+
+    if (isWindowScroller(scroller)) {
+      return {
+        x: rect.left + cur.x - marginLeft,
+        y: rect.top + cur.y - marginTop - padTop,
+        curX: cur.x,
+        curY: cur.y,
+      };
+    }
+
+    const sRect = scroller.getBoundingClientRect();
+    return {
+      x: scroller.scrollLeft + (rect.left - sRect.left) - marginLeft,
+      y: scroller.scrollTop + (rect.top - sRect.top) - marginTop - padTop,
+      curX: cur.x,
+      curY: cur.y,
+    };
+  }
+
+  function resolveHashTarget(rawHash) {
+    let hash = rawHash == null ? "" : String(rawHash);
+    if (hash.charAt(0) === "#") hash = hash.slice(1);
+    try {
+      hash = decodeURIComponent(hash);
+    } catch (_) {
+      /* keep raw */
+    }
+    if (!hash || hash.toLowerCase() === "top") {
+      return { kind: "top" };
+    }
+
+    let el = document.getElementById(hash);
+    if (!el) {
+      const named = document.getElementsByName(hash);
+      if (named && named.length) el = named[0];
+    }
+    if (!el && typeof CSS !== "undefined" && CSS.escape) {
+      try {
+        el = document.querySelector("#" + CSS.escape(hash));
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    if (!el) return null;
+    return { kind: "element", el };
+  }
+
+  function sameDocumentHref(anchor) {
+    const hrefAttr = anchor.getAttribute("href");
+    if (hrefAttr == null || hrefAttr === "") return null;
+    if (anchor.hasAttribute("download")) return null;
+    const targetAttr = anchor.getAttribute("target");
+    if (targetAttr && targetAttr !== "_self") return null;
+
+    if (hrefAttr === "#" || hrefAttr === "#top") return hrefAttr;
+    if (hrefAttr.charAt(0) === "#") return hrefAttr;
+
+    if (hrefAttr.indexOf("#") === -1) return null;
+
+    let url;
+    try {
+      url = new URL(hrefAttr, location.href);
+    } catch (_) {
+      return null;
+    }
+    if (url.origin !== location.origin) return null;
+    if (url.pathname !== location.pathname) return null;
+    if (url.search !== location.search) return null;
+    return url.hash || "#";
+  }
+
+  function setHashWithoutJump(hash) {
+    const next = !hash || hash === "#" ? "" : hash.charAt(0) === "#" ? hash : "#" + hash;
+    ignoreHashChange = true;
+    lastHashNav = now();
+    try {
+      if (history.pushState) {
+        history.pushState(
+          null,
+          "",
+          location.pathname + location.search + next
+        );
+      } else if (next) {
+        location.hash = next;
+      }
+    } catch (_) {
+      try {
+        if (next) location.hash = next;
+      } catch (__) {
+        /* ignore */
+      }
+    }
+    setTimeout(() => {
+      ignoreHashChange = false;
+    }, 0);
+  }
+
+  function smoothScrollToResolved(resolved) {
+    if (!resolved) return false;
+    const el = resolved.kind === "element" ? resolved.el : null;
+    const scroller = el
+      ? overflowingAncestor(el)
+      : documentScroller();
+    const dest = targetOffsetInScroller(scroller, el);
+    const dx = dest.x - dest.curX;
+    const dy = dest.y - dest.curY;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return true;
+
+    scrollArray(scroller, dx, dy, { replace: true, accelerate: false });
+
+    if (el && typeof el.focus === "function") {
+      try {
+        if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+        el.focus({ preventScroll: true });
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    return true;
+  }
+
+  function navigateToHash(hash, { updateHistory } = { updateHistory: true }) {
+    if (!enabled) return false;
+    const resolved = resolveHashTarget(hash);
+    if (!resolved) return false;
+    if (updateHistory) {
+      const normalized =
+        resolved.kind === "top"
+          ? "#"
+          : "#" + (hash.charAt(0) === "#" ? hash.slice(1) : hash);
+      setHashWithoutJump(normalized);
+    }
+    return smoothScrollToResolved(resolved);
+  }
+
+  function onAnchorClick(event) {
+    if (!enabled || event.defaultPrevented) return;
+    if (event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    let node = event.target;
+    if (node && node.nodeType === 3) node = node.parentElement;
+    const anchor = node && node.closest ? node.closest("a[href]") : null;
+    if (!anchor || anchor.closest("svg")) return;
+
+    const hash = sameDocumentHref(anchor);
+    if (hash == null) return;
+
+    const resolved = resolveHashTarget(hash);
+    if (!resolved) return;
+
+    // Prevent the browser's instant #hash jump; allow page listeners to bubble
+    // (TOC active-state, analytics) — scrollIntoView from those hits the bridge.
+    event.preventDefault();
+    navigateToHash(hash, { updateHistory: true });
+  }
+
+  function onHashChange() {
+    if (!enabled) return;
+    if (ignoreHashChange) {
+      ignoreHashChange = false;
+      return;
+    }
+    // Avoid double-handling right after our own pushState fallback
+    if (now() - lastHashNav < 50) return;
+    navigateToHash(location.hash, { updateHistory: false });
+  }
+
+  function onBridgeScroll(event) {
+    if (!enabled) return;
+    const detail = event.detail || {};
+    if (detail.kind === "scrollIntoView") {
+      event.preventDefault();
+      event.stopPropagation();
+      const el = event.target;
+      if (!el || el.nodeType !== 1) return;
+      smoothScrollToResolved({ kind: "element", el });
+      return;
+    }
+    if (detail.kind === "scrollTo") {
+      event.preventDefault();
+      event.stopPropagation();
+      const scroller = documentScroller();
+      const cur = currentScroll(scroller);
+      const dx = (Number(detail.x) || 0) - cur.x;
+      const dy = (Number(detail.y) || 0) - cur.y;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      scrollArray(scroller, dx, dy, { replace: true, accelerate: false });
+    }
   }
 
   /**
@@ -531,6 +814,11 @@
     window.addEventListener("mousedown", mousedown, true);
     window.addEventListener("mouseup", mouseup, true);
     window.addEventListener("mousemove", mousemove, true);
+    // In-page TOC / hash links (capture before the browser's instant jump)
+    document.addEventListener("click", onAnchorClick, true);
+    window.addEventListener("hashchange", onHashChange, false);
+    // MAIN-world bridge events (scrollIntoView / smooth scrollTo)
+    document.addEventListener("ssf:smooth-scroll", onBridgeScroll, true);
 
     initDone = true;
   }
