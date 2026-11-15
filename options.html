@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smooth Scroll Free — Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="brand">
+        <img src="icons/icon48.png" width="40" height="40" alt="" />
+        <div>
+          <h1>Smooth Scroll Free</h1>
+          <p class="tagline">Open-source smooth scrolling · MIT</p>
+        </div>
+      </header>
+
+      <section aria-labelledby="scroll-settings-title">
+        <h2 id="scroll-settings-title">Scroll Settings</h2>
+
+        <div class="row profiles-row">
+          <label class="row-label">Load profile</label>
+          <div class="profiles" id="profiles" role="listbox" aria-label="Load profile">
+            <button type="button" class="profile" data-profile="custom">Custom</button>
+            <button type="button" class="profile" data-profile="default">Default</button>
+            <button type="button" class="profile" data-profile="iphone">iPhone</button>
+            <button type="button" class="profile" data-profile="opera">Opera</button>
+            <button type="button" class="profile" data-profile="ie">IE</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <label class="row-label" for="stepSize">Step size [px]</label>
+          <input id="stepSize" name="stepSize" type="number" min="1" max="1000" step="1" />
+          <span class="hint">Default value: 120 (how much)</span>
+        </div>
+
+        <div class="row">
+          <label class="row-label" for="animationTime">Animation time [ms]</label>
+          <input id="animationTime" name="animationTime" type="number" min="50" max="2000" step="10" />
+          <span class="hint">Default value: 400 (how long)</span>
+        </div>
+
+        <div class="row">
+          <label class="row-label" for="accelerationScale">Acceleration scale</label>
+          <input id="accelerationScale" name="accelerationScale" type="number" min="1" max="10" step="0.1" />
+          <span class="hint">Default value: 3</span>
+        </div>
+
+        <div class="row">
+          <label class="row-label" for="accelerationDelta">Acceleration delta [ms]</label>
+          <input id="accelerationDelta" name="accelerationDelta" type="number" min="1" max="500" step="1" />
+          <span class="hint">Default value: 50 (time between scroll events)</span>
+        </div>
+
+        <div class="row">
+          <label class="row-label" for="pulseScale">Pulse Scale</label>
+          <input id="pulseScale" name="pulseScale" type="number" min="0.5" max="20" step="0.1" />
+          <span class="hint">Default value: 4 (ratio of "tail" to "acceleration")</span>
+        </div>
+
+        <div class="row">
+          <label class="row-label" for="arrowScroll">Arrow key step size [px]</label>
+          <input id="arrowScroll" name="arrowScroll" type="number" min="1" max="500" step="1" />
+          <span class="hint">Default value: 50</span>
+        </div>
+      </section>
+
+      <section aria-labelledby="features-title">
+        <h2 id="features-title">Features</h2>
+
+        <label class="check">
+          <input type="checkbox" id="keyboardSupport" name="keyboardSupport" />
+          <span>Enable keyboard support</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="touchpadSupport" name="touchpadSupport" />
+          <span>Enable touchpad support</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="pulseAlgorithm" name="pulseAlgorithm" />
+          <span>Enable pulse algorithm</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="middleMouse" name="middleMouse" />
+          <span>Enable middle mouse scrolling</span>
+        </label>
+      </section>
+
+      <footer class="footer">
+        <button type="button" id="resetBtn" class="secondary">Reset to Default</button>
+        <span id="status" class="status" role="status" aria-live="polite"></span>
+      </footer>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
