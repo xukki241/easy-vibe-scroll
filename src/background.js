@@ -4,7 +4,7 @@
 
 const DEFAULTS = {
   profile: "default",
-  stepSize: 120,
+  stepSize: 100,
   animationTime: 400,
   accelerationMax: 3,
   accelerationScale: 3,
@@ -22,8 +22,22 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   const stored = await chrome.storage.sync.get(null);
   if (!stored || Object.keys(stored).length === 0) {
     await chrome.storage.sync.set(DEFAULTS);
-  } else if (stored.accelerationScale == null && stored.accelerationMax != null) {
-    await chrome.storage.sync.set({ accelerationScale: stored.accelerationMax });
+  } else {
+    const patch = {};
+    if (stored.accelerationScale == null && stored.accelerationMax != null) {
+      patch.accelerationScale = stored.accelerationMax;
+    }
+    // Migrate older 120 default toward store Default (100) only when still on stock 120
+    if (
+      details.reason === "update" &&
+      stored.stepSize === 120 &&
+      (stored.profile === "default" || stored.profile == null)
+    ) {
+      patch.stepSize = 100;
+    }
+    if (Object.keys(patch).length) {
+      await chrome.storage.sync.set(patch);
+    }
   }
   if (details.reason === "install") {
     chrome.runtime.openOptionsPage();

@@ -1,11 +1,11 @@
 /**
  * Shared defaults & profile presets for Smooth Scroll Free.
- * Values mirror the public options UX (Chrome Web Store screenshots).
+ * Values mirror the public options UX (Chrome/Edge Web Store screenshots).
  */
 
 export const DEFAULTS = Object.freeze({
   profile: "default",
-  stepSize: 120,
+  stepSize: 100,
   animationTime: 400,
   accelerationMax: 3,
   accelerationDelta: 50,
@@ -23,7 +23,7 @@ export const DEFAULTS = Object.freeze({
 export const PROFILES = Object.freeze({
   custom: null, // means "keep current numbers"
   default: {
-    stepSize: 120,
+    stepSize: 100,
     animationTime: 400,
     accelerationMax: 3,
     accelerationDelta: 50,
