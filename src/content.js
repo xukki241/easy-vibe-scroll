@@ -43,6 +43,15 @@
   let autoScroll = null; // middle-mouse autoscroll state
   let bridgeBurst = 0;
   let bridgeBurstReset = 0;
+  let moveListening = false;
+  let overflowCacheEl = null;
+  let overflowCacheResult = null;
+  let overflowCacheAt = 0;
+  let stickyPadCache = 0;
+  let stickyPadAt = 0;
+  let hostFlags = null; // lazy { heavySpa, snapPath }
+  const MAX_QUE = 4;
+  const OVERFLOW_CACHE_MS = 320;
 
   const KEY = {
     left: 37,
@@ -86,7 +95,51 @@
   }
 
   function now() {
-    return Date.now();
+    return typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now();
+  }
+
+  function hostEndsWith(suffix) {
+    const h = (location.hostname || "").toLowerCase();
+    return h === suffix || h.endsWith("." + suffix);
+  }
+
+  function getHostFlags() {
+    // Cache only host classification; re-read pathname (cheap) for Shorts/Reels
+    if (!hostFlags) {
+      hostFlags = {
+        heavySpa:
+          hostEndsWith("facebook.com") ||
+          hostEndsWith("fb.com") ||
+          hostEndsWith("instagram.com") ||
+          hostEndsWith("youtube.com") ||
+          hostEndsWith("youtube-nocookie.com") ||
+          hostEndsWith("twitter.com") ||
+          hostEndsWith("x.com") ||
+          hostEndsWith("linkedin.com") ||
+          hostEndsWith("reddit.com") ||
+          hostEndsWith("tiktok.com") ||
+          hostEndsWith("threads.net") ||
+          hostEndsWith("pinterest.com") ||
+          hostEndsWith("tumblr.com"),
+      };
+    }
+    const path = location.pathname || "";
+    let snapPath = false;
+    if (
+      hostEndsWith("youtube.com") ||
+      hostEndsWith("youtube-nocookie.com")
+    ) {
+      snapPath = /^\/shorts\b/i.test(path);
+    } else if (hostEndsWith("instagram.com")) {
+      snapPath = /\/(reels?|stories)\b/i.test(path);
+    } else if (hostEndsWith("facebook.com") || hostEndsWith("fb.com")) {
+      snapPath = /\/(reel|reels|share\/r)\b/i.test(path);
+    } else if (hostEndsWith("tiktok.com")) {
+      snapPath = true;
+    }
+    return { heavySpa: hostFlags.heavySpa, snapPath };
   }
 
   function isNodeName(el, tag) {
@@ -127,16 +180,25 @@
   function canOverflow(node) {
     if (!node || node === document) return false;
     const style = getComputedStyle(node);
-    return /auto|scroll|overlay/.test(
-      `${style.overflow}${style.overflowY}${style.overflowX}`
+    const y = style.overflowY;
+    const x = style.overflowX;
+    return (
+      y === "auto" ||
+      y === "scroll" ||
+      y === "overlay" ||
+      x === "auto" ||
+      x === "scroll" ||
+      x === "overlay"
     );
   }
 
   function isScrollable(node) {
     if (!node || node.nodeType !== 1) return false;
+    // Cheap size check before getComputedStyle
     const dy = node.clientHeight + 10 < node.scrollHeight;
     const dx = node.clientWidth + 10 < node.scrollWidth;
-    return (dy || dx) && canOverflow(node);
+    if (!dy && !dx) return false;
+    return canOverflow(node);
   }
 
   function documentScroller() {
@@ -150,18 +212,44 @@
   }
 
   function overflowingAncestor(el) {
+    const t = now();
+    if (
+      el &&
+      el === overflowCacheEl &&
+      t - overflowCacheAt < OVERFLOW_CACHE_MS &&
+      overflowCacheResult
+    ) {
+      return overflowCacheResult;
+    }
+
     const body = document.body;
     const html = document.documentElement;
     if (!el || !body) return documentScroller();
     if (el.nodeType === 3) el = el.parentElement;
 
+    const flags = getHostFlags();
+    // Heavy SPAs (Facebook feed): prefer the document scroller; only shallow-scan
+    // for true nested overflow (comments/sidebar), avoid deep getComputedStyle walks.
+    const maxDepth = flags.heavySpa ? 6 : 40;
     let node = el;
-    while (node && node !== body && node !== html && node !== document) {
-      if (isScrollable(node)) return node;
+    let depth = 0;
+    while (
+      node &&
+      node !== body &&
+      node !== html &&
+      node !== document &&
+      depth < maxDepth
+    ) {
+      if (isScrollable(node)) {
+        overflowCacheEl = el;
+        overflowCacheResult = node;
+        overflowCacheAt = t;
+        return node;
+      }
       node = node.parentElement;
+      depth++;
     }
 
-    // Document / frame root
     if (isFrame) {
       if (isScrollable(body)) return body;
       if (isScrollable(html)) return html;
@@ -169,14 +257,9 @@
     }
 
     const scroller = documentScroller();
-    // Prefer the element that actually moves with window.scrollBy
-    if (
-      scroller.scrollHeight > window.innerHeight + 10 ||
-      scroller.scrollWidth > window.innerWidth + 10
-    ) {
-      return scroller;
-    }
-    if (body && body.scrollHeight > window.innerHeight + 10) return body;
+    overflowCacheEl = el;
+    overflowCacheResult = scroller;
+    overflowCacheAt = t;
     return scroller;
   }
 
@@ -247,6 +330,10 @@
       lastY: top < 0 ? 0.99 : -0.99,
       start: now(),
     });
+    // Bound impulse queue so rapid notches on heavy pages don't O(n) explode
+    while (que.length > MAX_QUE) {
+      que.shift();
+    }
 
     if (pending) return;
     pending = true;
@@ -305,6 +392,9 @@
   }
 
   function stickyTopOffset(scroller) {
+    const t = now();
+    if (t - stickyPadAt < 1000) return stickyPadCache;
+
     let pad = 0;
     try {
       const host = isWindowScroller(scroller)
@@ -315,17 +405,19 @@
       /* ignore */
     }
 
-    if (!isWindowScroller(scroller)) return pad;
+    // Skip expensive querySelectorAll on heavy SPAs (anchor nav is rare there)
+    if (!isWindowScroller(scroller) || getHostFlags().heavySpa) {
+      stickyPadCache = pad;
+      stickyPadAt = t;
+      return pad;
+    }
 
-    // Heuristic: fixed/sticky chrome sitting at the top of the viewport
     try {
       const nodes = document.body
-        ? document.body.querySelectorAll(
-            "header, nav, [class*='sticky'], [class*='Sticky'], [class*='header'], [class*='Header'], [class*='navbar'], [class*='NavBar']"
-          )
+        ? document.body.querySelectorAll("header, nav")
         : [];
       let maxBottom = 0;
-      const limit = Math.min(nodes.length, 40);
+      const limit = Math.min(nodes.length, 12);
       for (let i = 0; i < limit; i++) {
         const el = nodes[i];
         const st = getComputedStyle(el);
@@ -333,8 +425,7 @@
         if (st.visibility === "hidden" || st.display === "none") continue;
         const r = el.getBoundingClientRect();
         if (r.height <= 0 || r.width <= 0) continue;
-        if (r.top > 8) continue;
-        if (r.bottom <= 0) continue;
+        if (r.top > 8 || r.bottom <= 0) continue;
         if (r.height > window.innerHeight * 0.45) continue;
         if (r.bottom > maxBottom) maxBottom = r.bottom;
       }
@@ -342,6 +433,8 @@
     } catch (_) {
       /* ignore */
     }
+    stickyPadCache = pad;
+    stickyPadAt = t;
     return pad;
   }
 
@@ -535,39 +628,10 @@
     navigateToHash(location.hash, { updateHistory: false });
   }
 
-  function hostEndsWith(suffix) {
-    const h = (location.hostname || "").toLowerCase();
-    return h === suffix || h.endsWith("." + suffix);
-  }
-
-  /** YouTube Shorts / IG·FB Reels / TikTok-style vertical snap feeds */
-  function isSnapFeedPath() {
-    const path = location.pathname || "";
-    if (
-      hostEndsWith("youtube.com") ||
-      hostEndsWith("youtube-nocookie.com")
-    ) {
-      if (/^\/shorts\b/i.test(path)) return true;
-    }
-    if (hostEndsWith("instagram.com")) {
-      if (/\/(reels?|stories)\b/i.test(path)) return true;
-    }
-    if (hostEndsWith("facebook.com") || hostEndsWith("fb.com")) {
-      if (/\/(reel|reels|share\/r)\b/i.test(path)) return true;
-    }
-    if (hostEndsWith("tiktok.com")) return true;
-    return false;
-  }
-
   function hasSnapAncestor(el) {
+    // Cheap tag/id checks first; getComputedStyle only a few levels
     let node = el;
-    for (let i = 0; i < 14 && node && node.nodeType === 1; i++) {
-      try {
-        const st = getComputedStyle(node);
-        if (st.scrollSnapType && st.scrollSnapType !== "none") return true;
-      } catch (_) {
-        /* ignore */
-      }
+    for (let i = 0; i < 8 && node && node.nodeType === 1; i++) {
       const tag = node.tagName || "";
       if (/SHORTS/i.test(tag)) return true;
       const id = node.id || "";
@@ -578,19 +642,30 @@
       ) {
         return true;
       }
+      try {
+        const snap = getComputedStyle(node).scrollSnapType;
+        if (snap && snap !== "none") return true;
+      } catch (_) {
+        /* ignore */
+      }
       node = node.parentElement;
     }
     return false;
   }
 
   function shouldBypassSmooth(target) {
-    if (isSnapFeedPath()) return true;
+    const flags = getHostFlags();
+    if (flags.snapPath) return true;
+    // Avoid deep snap walks on Facebook/etc. home feeds (path already not snap)
+    if (flags.heavySpa) return false;
     if (target && hasSnapAncestor(target)) return true;
     return false;
   }
 
   function onBridgeScroll(event) {
     if (!enabled) return;
+    // Bridge is not installed on heavy SPAs; ignore stray events
+    if (getHostFlags().heavySpa) return;
     const detail = event.detail || {};
     if (detail.kind !== "scrollIntoView" && detail.kind !== "scrollTo") return;
 
@@ -810,8 +885,24 @@
     scrollArray(elem, x, y);
   }
 
+  function setMoveListening(on) {
+    if (on && !moveListening) {
+      window.addEventListener("mousemove", mousemove, {
+        capture: true,
+        passive: true,
+      });
+      moveListening = true;
+    } else if (!on && moveListening) {
+      window.removeEventListener("mousemove", mousemove, true);
+      moveListening = false;
+    }
+  }
+
   function stopAutoScroll() {
-    if (!autoScroll) return;
+    if (!autoScroll) {
+      setMoveListening(false);
+      return;
+    }
     if (autoScroll.raf) {
       try {
         if (window.cancelAnimationFrame) cancelAnimationFrame(autoScroll.raf);
@@ -824,6 +915,7 @@
       autoScroll.marker.parentNode.removeChild(autoScroll.marker);
     }
     autoScroll = null;
+    setMoveListening(false);
   }
 
   function ensureAutoScrollMarker(x, y) {
@@ -857,11 +949,13 @@
       marker,
       raf: 0,
     };
+    setMoveListening(true);
 
     const tick = () => {
       if (!autoScroll) return;
       const { vx, vy, scroller: sc } = autoScroll;
       if (vx || vy) applyScroll(sc, vx, vy);
+      // Keep rAF only while autoscroll mode is on (mousemove updates vx/vy)
       autoScroll.raf = requestFrame(tick);
     };
     autoScroll.raf = requestFrame(tick);
@@ -991,13 +1085,15 @@
     window.addEventListener("mousedown", mousedown, true);
     window.addEventListener("mouseup", mouseup, true);
     window.addEventListener("auxclick", auxclick, true);
-    window.addEventListener("mousemove", mousemove, true);
+    // mousemove is attached lazily only while middle-mouse autoscroll is active
     window.addEventListener("blur", stopAutoScroll, true);
     // In-page TOC / hash links (capture before the browser's instant jump)
     document.addEventListener("click", onAnchorClick, true);
     window.addEventListener("hashchange", onHashChange, false);
-    // MAIN-world bridge events (scrollIntoView / smooth scrollTo)
-    document.addEventListener("ssf:smooth-scroll", onBridgeScroll, true);
+    // MAIN-world bridge events — skipped on heavy SPAs (bridge not installed)
+    if (!getHostFlags().heavySpa) {
+      document.addEventListener("ssf:smooth-scroll", onBridgeScroll, true);
+    }
 
     initDone = true;
   }

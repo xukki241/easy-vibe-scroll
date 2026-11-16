@@ -25,6 +25,7 @@ Inspired by the product feel of [SmoothScroll](https://smoothscroll.net/) (setti
 - Smooth wheel scrolling with optional **pulse algorithm** (Herf-style impulse)
 - Smooth **same-document anchor / TOC** jumps (`a[href^="#"]`, hashchange, `scrollIntoView`)
 - **Bypasses** YouTube Shorts / Instagram·Facebook Reels / TikTok and CSS `scroll-snap` feeds so native swipe works
+- **Perf:** MAIN-world bridge disabled on Facebook/IG/YT and other heavy SPAs; overflow ancestor caching; bounded impulse queue
 - Middle-mouse **click-to-toggle autoscroll** (direct pixels, not pulse queue)
 - Intercepts `wheel` early (`capture` + `{passive:false}`) on all frames
 - Scrolls nested overflow containers, then bubbles at edges
