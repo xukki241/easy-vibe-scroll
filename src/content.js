@@ -50,6 +50,7 @@
   let stickyPadCache = 0;
   let stickyPadAt = 0;
   let hostFlags = null; // lazy { heavySpa, snapPath }
+  let cssSmoothDepth = 0;
   const MAX_QUE = 4;
   const OVERFLOW_CACHE_MS = 320;
 
@@ -177,28 +178,37 @@
     return !allDivisibleBy120;
   }
 
-  function canOverflow(node) {
-    if (!node || node === document) return false;
-    const style = getComputedStyle(node);
-    const y = style.overflowY;
-    const x = style.overflowX;
+  function overflowAllows(axisValue) {
     return (
-      y === "auto" ||
-      y === "scroll" ||
-      y === "overlay" ||
-      x === "auto" ||
-      x === "scroll" ||
-      x === "overlay"
+      axisValue === "auto" ||
+      axisValue === "scroll" ||
+      axisValue === "overlay"
     );
   }
 
-  function isScrollable(node) {
+  /**
+   * @param {Element} node
+   * @param {'x'|'y'|'either'} [axis]
+   */
+  function isScrollable(node, axis) {
     if (!node || node.nodeType !== 1) return false;
-    // Cheap size check before getComputedStyle
     const dy = node.clientHeight + 10 < node.scrollHeight;
     const dx = node.clientWidth + 10 < node.scrollWidth;
     if (!dy && !dx) return false;
-    return canOverflow(node);
+
+    let style;
+    try {
+      style = getComputedStyle(node);
+    } catch (_) {
+      return false;
+    }
+    // Fixed chrome (sticky footers/headers) rarely owns page scroll
+    if (style.position === "fixed") return false;
+    const canY = dy && overflowAllows(style.overflowY);
+    const canX = dx && overflowAllows(style.overflowX);
+    if (axis === "y") return canY;
+    if (axis === "x") return canX;
+    return canY || canX;
   }
 
   function documentScroller() {
@@ -211,15 +221,23 @@
     );
   }
 
-  function overflowingAncestor(el) {
+  function wheelAxis(x, y) {
+    if (Math.abs(y) >= Math.abs(x)) return "y";
+    if (x) return "x";
+    return "y";
+  }
+
+  function overflowingAncestor(el, axis) {
     const t = now();
+    const axisKey = axis || "either";
     if (
       el &&
       el === overflowCacheEl &&
       t - overflowCacheAt < OVERFLOW_CACHE_MS &&
-      overflowCacheResult
+      overflowCacheResult &&
+      overflowCacheResult._ssfAxis === axisKey
     ) {
-      return overflowCacheResult;
+      return overflowCacheResult.node;
     }
 
     const body = document.body;
@@ -228,9 +246,9 @@
     if (el.nodeType === 3) el = el.parentElement;
 
     const flags = getHostFlags();
-    // Heavy SPAs (Facebook feed): prefer the document scroller; only shallow-scan
-    // for true nested overflow (comments/sidebar), avoid deep getComputedStyle walks.
-    const maxDepth = flags.heavySpa ? 6 : 40;
+    // Heavy SPAs: shallow walk. Long marketing pages: full walk but axis-aware
+    // so horizontal carousels / overflow-x strips don't steal vertical wheel.
+    const maxDepth = flags.heavySpa ? 6 : 48;
     let node = el;
     let depth = 0;
     while (
@@ -240,9 +258,9 @@
       node !== document &&
       depth < maxDepth
     ) {
-      if (isScrollable(node)) {
+      if (isScrollable(node, axisKey === "either" ? "either" : axisKey)) {
         overflowCacheEl = el;
-        overflowCacheResult = node;
+        overflowCacheResult = { node, _ssfAxis: axisKey };
         overflowCacheAt = t;
         return node;
       }
@@ -251,14 +269,18 @@
     }
 
     if (isFrame) {
-      if (isScrollable(body)) return body;
-      if (isScrollable(html)) return html;
+      if (isScrollable(body, axisKey === "either" ? "either" : axisKey)) {
+        return body;
+      }
+      if (isScrollable(html, axisKey === "either" ? "either" : axisKey)) {
+        return html;
+      }
       return documentScroller();
     }
 
     const scroller = documentScroller();
     overflowCacheEl = el;
-    overflowCacheResult = scroller;
+    overflowCacheResult = { node: scroller, _ssfAxis: axisKey };
     overflowCacheAt = t;
     return scroller;
   }
@@ -283,10 +305,83 @@
     );
   }
 
+  function suppressCssSmoothScroll() {
+    if (cssSmoothDepth++) return;
+    const html = document.documentElement;
+    const body = document.body;
+    try {
+      if (html) {
+        html.setAttribute(
+          "data-ssf-sb",
+          html.style.getPropertyValue("scroll-behavior") || ""
+        );
+        html.style.setProperty("scroll-behavior", "auto", "important");
+      }
+      if (body) {
+        body.setAttribute(
+          "data-ssf-sb",
+          body.style.getPropertyValue("scroll-behavior") || ""
+        );
+        body.style.setProperty("scroll-behavior", "auto", "important");
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function restoreCssSmoothScroll() {
+    if (cssSmoothDepth <= 0) return;
+    if (--cssSmoothDepth > 0) return;
+    cssSmoothDepth = 0;
+    const restore = (el) => {
+      if (!el || !el.hasAttribute("data-ssf-sb")) return;
+      const prev = el.getAttribute("data-ssf-sb") || "";
+      el.removeAttribute("data-ssf-sb");
+      try {
+        if (prev) el.style.setProperty("scroll-behavior", prev);
+        else el.style.removeProperty("scroll-behavior");
+      } catch (_) {
+        /* ignore */
+      }
+    };
+    restore(document.documentElement);
+    restore(document.body);
+  }
+
+  function scrollByInstant(target, dx, dy) {
+    if (!dx && !dy) return;
+    const optsInstant = { left: dx, top: dy, behavior: "instant" };
+    const optsAuto = { left: dx, top: dy, behavior: "auto" };
+    try {
+      target.scrollBy(optsInstant);
+      return;
+    } catch (_) {
+      /* older engines */
+    }
+    try {
+      target.scrollBy(optsAuto);
+      return;
+    } catch (_) {
+      /* ignore */
+    }
+    if (target === window) {
+      window.scrollBy(dx, dy);
+    } else {
+      if (dx) target.scrollLeft += dx;
+      if (dy) target.scrollTop += dy;
+    }
+  }
+
   function applyScroll(elem, dx, dy) {
     if (!dx && !dy) return;
+    // Marketing pages often set html { scroll-behavior: smooth }. Incremental
+    // rAF scrollBy must be instant or the browser re-eases every frame → jank.
     if (isWindowScroller(elem)) {
-      window.scrollBy(dx, dy);
+      scrollByInstant(window, dx, dy);
+      return;
+    }
+    if (typeof elem.scrollBy === "function") {
+      scrollByInstant(elem, dx, dy);
       return;
     }
     if (dx) elem.scrollLeft += dx;
@@ -296,7 +391,10 @@
   function cancelAnimation() {
     que = [];
     animGen += 1;
-    pending = false;
+    if (pending) {
+      pending = false;
+      restoreCssSmoothScroll();
+    }
   }
 
   function scrollArray(elem, left, top, opts) {
@@ -337,14 +435,13 @@
 
     if (pending) return;
     pending = true;
+    suppressCssSmoothScroll();
 
     // Continuous rAF impulse loop — new wheel notches push onto `que`
     // while this runs, so motion accumulates like classic SmoothScroll.
     const step = () => {
-      if (gen !== animGen) {
-        pending = false;
-        return;
-      }
+      // Superseded by cancelAnimation / replace — that path owns CSS restore
+      if (gen !== animGen) return;
       const tNow = now();
       let dx = 0;
       let dy = 0;
@@ -371,15 +468,13 @@
 
       applyScroll(elem, dx, dy);
 
-      if (gen !== animGen) {
-        pending = false;
-        return;
-      }
+      if (gen !== animGen) return;
 
       if (que.length) {
         requestFrame(step);
       } else {
         pending = false;
+        restoreCssSmoothScroll();
       }
     };
 
@@ -771,18 +866,46 @@
     x = -x;
     y = -y;
 
-    const elem = overflowingAncestor(target || activeElement || document.body);
-    if (!elem) return;
     if (!x && !y) return;
 
+    const axis = wheelAxis(x, y);
+    const elem = overflowingAncestor(
+      target || activeElement || document.body,
+      axis
+    );
+    if (!elem) return;
+
     // If nested container can't move further, bubble to parent/document
-    const scroller = climbIfAtEdge(elem, x, y);
+    const scroller = climbIfAtEdge(elem, x, y, axis);
     event.preventDefault();
     scrollArray(scroller, x, y);
   }
 
   function canScrollInDirection(node, x, y) {
-    if (isWindowScroller(node)) return true;
+    if (isWindowScroller(node)) {
+      // Document: only claim vertical room when the page can actually move
+      if (y < 0) return (window.scrollY || window.pageYOffset || 0) > 0;
+      if (y > 0) {
+        const se = documentScroller();
+        const top = window.scrollY || window.pageYOffset || 0;
+        const max = Math.max(
+          0,
+          (se ? se.scrollHeight : 0) - window.innerHeight
+        );
+        return top < max - 1;
+      }
+      if (x < 0) return (window.scrollX || window.pageXOffset || 0) > 0;
+      if (x > 0) {
+        const se = documentScroller();
+        const left = window.scrollX || window.pageXOffset || 0;
+        const max = Math.max(
+          0,
+          (se ? se.scrollWidth : 0) - window.innerWidth
+        );
+        return left < max - 1;
+      }
+      return false;
+    }
     if (y < 0 && node.scrollTop > 0) return true;
     if (
       y > 0 &&
@@ -800,13 +923,14 @@
     return !x && !y;
   }
 
-  function climbIfAtEdge(elem, x, y) {
+  function climbIfAtEdge(elem, x, y, axis) {
     let node = elem;
-    for (let depth = 0; depth < 8; depth++) {
+    for (let depth = 0; depth < 10; depth++) {
       if (canScrollInDirection(node, x, y)) {
         return isWindowScroller(node) ? documentScroller() : node;
       }
-      const parent = overflowingAncestor(node.parentElement || document.body);
+      const parentEl = node.parentElement || document.body;
+      const parent = overflowingAncestor(parentEl, axis || wheelAxis(x, y));
       if (!parent || parent === node) return documentScroller();
       node = parent;
     }
