@@ -36,12 +36,13 @@
   let lastScroll = 0;
   let deltaBuffer = [120, 120, 120];
   let deltaBufferTimer = null;
-  let middleDown = false;
-  let middleLast = null;
   let pulseNormalize = 1;
   let animGen = 0;
   let ignoreHashChange = false;
   let lastHashNav = 0;
+  let autoScroll = null; // middle-mouse autoscroll state
+  let bridgeBurst = 0;
+  let bridgeBurstReset = 0;
 
   const KEY = {
     left: 37,
@@ -501,11 +502,13 @@
 
   function onAnchorClick(event) {
     if (!enabled || event.defaultPrevented) return;
+    if (event.button === 0 && autoScroll) stopAutoScroll();
     if (event.button !== 0) return;
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
 
     let node = event.target;
     if (node && node.nodeType === 3) node = node.parentElement;
+    if (shouldBypassSmooth(node)) return;
     const anchor = node && node.closest ? node.closest("a[href]") : null;
     if (!anchor || anchor.closest("svg")) return;
 
@@ -532,20 +535,85 @@
     navigateToHash(location.hash, { updateHistory: false });
   }
 
+  function hostEndsWith(suffix) {
+    const h = (location.hostname || "").toLowerCase();
+    return h === suffix || h.endsWith("." + suffix);
+  }
+
+  /** YouTube Shorts / IG·FB Reels / TikTok-style vertical snap feeds */
+  function isSnapFeedPath() {
+    const path = location.pathname || "";
+    if (
+      hostEndsWith("youtube.com") ||
+      hostEndsWith("youtube-nocookie.com")
+    ) {
+      if (/^\/shorts\b/i.test(path)) return true;
+    }
+    if (hostEndsWith("instagram.com")) {
+      if (/\/(reels?|stories)\b/i.test(path)) return true;
+    }
+    if (hostEndsWith("facebook.com") || hostEndsWith("fb.com")) {
+      if (/\/(reel|reels|share\/r)\b/i.test(path)) return true;
+    }
+    if (hostEndsWith("tiktok.com")) return true;
+    return false;
+  }
+
+  function hasSnapAncestor(el) {
+    let node = el;
+    for (let i = 0; i < 14 && node && node.nodeType === 1; i++) {
+      try {
+        const st = getComputedStyle(node);
+        if (st.scrollSnapType && st.scrollSnapType !== "none") return true;
+      } catch (_) {
+        /* ignore */
+      }
+      const tag = node.tagName || "";
+      if (/SHORTS/i.test(tag)) return true;
+      const id = node.id || "";
+      if (
+        id === "shorts-container" ||
+        id === "shorts-inner-container" ||
+        id === "reel_feed"
+      ) {
+        return true;
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  function shouldBypassSmooth(target) {
+    if (isSnapFeedPath()) return true;
+    if (target && hasSnapAncestor(target)) return true;
+    return false;
+  }
+
   function onBridgeScroll(event) {
     if (!enabled) return;
     const detail = event.detail || {};
+    if (detail.kind !== "scrollIntoView" && detail.kind !== "scrollTo") return;
+
+    // Leave native behavior on snap feeds; do not cancel the MAIN-world event
+    if (shouldBypassSmooth(event.target)) return;
+
+    const t = now();
+    if (t > bridgeBurstReset) {
+      bridgeBurst = 0;
+      bridgeBurstReset = t + 1000;
+    }
+    // Rate-limit spoofed CustomEvents from the page (Low: nuisance scroll)
+    if (++bridgeBurst > 48) return;
+
     if (detail.kind === "scrollIntoView") {
-      event.preventDefault();
-      event.stopPropagation();
       const el = event.target;
       if (!el || el.nodeType !== 1) return;
+      event.preventDefault();
       smoothScrollToResolved({ kind: "element", el });
       return;
     }
     if (detail.kind === "scrollTo") {
       event.preventDefault();
-      event.stopPropagation();
       const scroller = documentScroller();
       const cur = currentScroll(scroller);
       const dx = (Number(detail.x) || 0) - cur.x;
@@ -609,6 +677,9 @@
     ) {
       return;
     }
+
+    // Shorts / Reels / scroll-snap feeds: do not preventDefault — native snap wins
+    if (shouldBypassSmooth(target)) return;
 
     const { deltaX, deltaY, sample } = normalizeWheel(event);
 
@@ -739,28 +810,115 @@
     scrollArray(elem, x, y);
   }
 
+  function stopAutoScroll() {
+    if (!autoScroll) return;
+    if (autoScroll.raf) {
+      try {
+        if (window.cancelAnimationFrame) cancelAnimationFrame(autoScroll.raf);
+        else clearTimeout(autoScroll.raf);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    if (autoScroll.marker && autoScroll.marker.parentNode) {
+      autoScroll.marker.parentNode.removeChild(autoScroll.marker);
+    }
+    autoScroll = null;
+  }
+
+  function ensureAutoScrollMarker(x, y) {
+    const id = "ssf-autoscroll-marker";
+    let el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement("div");
+      el.id = id;
+      el.setAttribute("aria-hidden", "true");
+      el.style.cssText =
+        "position:fixed;z-index:2147483647;width:28px;height:28px;margin:-14px 0 0 -14px;" +
+        "border:2px solid #2f6fed;border-radius:50%;background:rgba(47,111,237,.15);" +
+        "pointer-events:none;box-shadow:0 0 0 1px rgba(255,255,255,.8);";
+      (document.documentElement || document.body).appendChild(el);
+    }
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    return el;
+  }
+
+  function startAutoScroll(clientX, clientY, scroller) {
+    stopAutoScroll();
+    cancelAnimation();
+    const marker = ensureAutoScrollMarker(clientX, clientY);
+    autoScroll = {
+      originX: clientX,
+      originY: clientY,
+      scroller: scroller || documentScroller(),
+      vx: 0,
+      vy: 0,
+      marker,
+      raf: 0,
+    };
+
+    const tick = () => {
+      if (!autoScroll) return;
+      const { vx, vy, scroller: sc } = autoScroll;
+      if (vx || vy) applyScroll(sc, vx, vy);
+      autoScroll.raf = requestFrame(tick);
+    };
+    autoScroll.raf = requestFrame(tick);
+  }
+
   function mousedown(event) {
     activeElement = event.target;
+    if (event.button !== 1 || !options.middleMouse) return;
+    if (isEditable(event.target)) return;
+    if (shouldBypassSmooth(event.target)) return;
+
+    // Click-to-toggle autoscroll (direct applyScroll — not pulse queue)
+    event.preventDefault();
+    if (autoScroll) {
+      stopAutoScroll();
+      return;
+    }
+    const scroller = overflowingAncestor(
+      event.target || activeElement || document.body
+    );
+    startAutoScroll(event.clientX, event.clientY, scroller);
+  }
+
+  function mouseup(event) {
+    // Keep autoscroll until a second middle-click (handled in mousedown)
     if (event.button === 1 && options.middleMouse) {
-      if (isEditable(event.target) || isNodeName(event.target, "a")) return;
-      middleDown = true;
-      middleLast = { x: event.clientX, y: event.clientY };
       event.preventDefault();
     }
   }
 
-  function mouseup(event) {
-    if (event.button === 1) middleDown = false;
+  function auxclick(event) {
+    // Stop Chromium's native middle-click autoscroll / open-link when we own it
+    if (event.button === 1 && options.middleMouse) {
+      event.preventDefault();
+    }
   }
 
   function mousemove(event) {
-    if (!middleDown || !options.middleMouse || !middleLast) return;
-    const dx = event.clientX - middleLast.x;
-    const dy = event.clientY - middleLast.y;
-    middleLast = { x: event.clientX, y: event.clientY };
-    const elem = overflowingAncestor(activeElement || document.body);
-    if (!elem) return;
-    if (dx || dy) scrollArray(elem, dx * 2, dy * 2);
+    if (!autoScroll || !options.middleMouse) return;
+    const dx = event.clientX - autoScroll.originX;
+    const dy = event.clientY - autoScroll.originY;
+    const dead = 10;
+    const scale = 0.12;
+    autoScroll.vx =
+      Math.abs(dx) > dead ? (dx - Math.sign(dx) * dead) * scale : 0;
+    autoScroll.vy =
+      Math.abs(dy) > dead ? (dy - Math.sign(dy) * dead) * scale : 0;
+  }
+
+  function keydownStopAutoScroll(event) {
+    if (autoScroll && event.keyCode === 27) stopAutoScroll();
+  }
+
+  function clamp(n, min, max, fallback) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return fallback;
+    return Math.min(max, Math.max(min, v));
   }
 
   function applySettings(settings) {
@@ -768,16 +926,33 @@
     if (settings && settings.accelerationScale != null) {
       options.accelerationMax = Number(settings.accelerationScale);
     }
-    options.accelerationMax =
-      Number(options.accelerationMax) || DEFAULTS.accelerationMax;
-    options.stepSize = Number(options.stepSize) || DEFAULTS.stepSize;
-    options.animationTime =
-      Number(options.animationTime) || DEFAULTS.animationTime;
-    options.accelerationDelta =
-      Number(options.accelerationDelta) || DEFAULTS.accelerationDelta;
-    options.pulseScale = Number(options.pulseScale) || DEFAULTS.pulseScale;
-    options.arrowScroll = Number(options.arrowScroll) || DEFAULTS.arrowScroll;
-    options.frameRate = Number(options.frameRate) || DEFAULTS.frameRate;
+    options.accelerationMax = clamp(
+      options.accelerationMax,
+      1,
+      10,
+      DEFAULTS.accelerationMax
+    );
+    options.stepSize = clamp(options.stepSize, 1, 1000, DEFAULTS.stepSize);
+    options.animationTime = clamp(
+      options.animationTime,
+      50,
+      2000,
+      DEFAULTS.animationTime
+    );
+    options.accelerationDelta = clamp(
+      options.accelerationDelta,
+      1,
+      500,
+      DEFAULTS.accelerationDelta
+    );
+    options.pulseScale = clamp(options.pulseScale, 0.5, 20, DEFAULTS.pulseScale);
+    options.arrowScroll = clamp(
+      options.arrowScroll,
+      1,
+      500,
+      DEFAULTS.arrowScroll
+    );
+    options.frameRate = clamp(options.frameRate, 30, 240, DEFAULTS.frameRate);
     options.keyboardSupport = Boolean(
       settings?.keyboardSupport ?? options.keyboardSupport
     );
@@ -788,6 +963,7 @@
       settings?.pulseAlgorithm ?? options.pulseAlgorithm
     );
     options.middleMouse = Boolean(settings?.middleMouse ?? options.middleMouse);
+    if (!options.middleMouse) stopAutoScroll();
     pulseNormalize = 1;
     enabled = true;
   }
@@ -811,9 +987,12 @@
     // Capture + non-passive so we win over page listeners and can preventDefault
     window.addEventListener("wheel", wheel, { passive: false, capture: true });
     window.addEventListener("keydown", keydown, { passive: false, capture: true });
+    window.addEventListener("keydown", keydownStopAutoScroll, true);
     window.addEventListener("mousedown", mousedown, true);
     window.addEventListener("mouseup", mouseup, true);
+    window.addEventListener("auxclick", auxclick, true);
     window.addEventListener("mousemove", mousemove, true);
+    window.addEventListener("blur", stopAutoScroll, true);
     // In-page TOC / hash links (capture before the browser's instant jump)
     document.addEventListener("click", onAnchorClick, true);
     window.addEventListener("hashchange", onHashChange, false);

@@ -10,7 +10,36 @@
 
   const EVT = "ssf:smooth-scroll";
 
+  function hostEndsWith(suffix) {
+    const h = (location.hostname || "").toLowerCase();
+    return h === suffix || h.endsWith("." + suffix);
+  }
+
+  /** Match content.js snap-feed bypass — leave native Shorts/Reels alone */
+  function isSnapFeedPath() {
+    try {
+      const path = location.pathname || "";
+      if (
+        hostEndsWith("youtube.com") ||
+        hostEndsWith("youtube-nocookie.com")
+      ) {
+        if (/^\/shorts\b/i.test(path)) return true;
+      }
+      if (hostEndsWith("instagram.com")) {
+        if (/\/(reels?|stories)\b/i.test(path)) return true;
+      }
+      if (hostEndsWith("facebook.com") || hostEndsWith("fb.com")) {
+        if (/\/(reel|reels|share\/r)\b/i.test(path)) return true;
+      }
+      if (hostEndsWith("tiktok.com")) return true;
+    } catch (_) {
+      /* ignore */
+    }
+    return false;
+  }
+
   function offer(target, kind, detail) {
+    if (isSnapFeedPath()) return false;
     try {
       const ev = new CustomEvent(EVT, {
         bubbles: true,
@@ -25,7 +54,7 @@
 
   const nativeIntoView = Element.prototype.scrollIntoView;
   Element.prototype.scrollIntoView = function scrollIntoView(arg) {
-    const handled = offer(this, "scrollIntoView", { arg });
+    const handled = offer(this, "scrollIntoView", { arg: null });
     if (handled) return;
     return nativeIntoView.apply(this, arguments);
   };
