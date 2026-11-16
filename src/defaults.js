@@ -1,11 +1,11 @@
 /**
  * Shared defaults & profile presets for Smooth Scroll Free.
- * Values mirror the public options UX (Chrome Web Store screenshots).
+ * Values mirror the public options UX (Chrome/Edge Web Store screenshots).
  */
 
 export const DEFAULTS = Object.freeze({
   profile: "default",
-  stepSize: 120,
+  stepSize: 100,
   animationTime: 400,
   accelerationMax: 3,
   accelerationDelta: 50,
@@ -23,7 +23,7 @@ export const DEFAULTS = Object.freeze({
 export const PROFILES = Object.freeze({
   custom: null, // means "keep current numbers"
   default: {
-    stepSize: 120,
+    stepSize: 100,
     animationTime: 400,
     accelerationMax: 3,
     accelerationDelta: 50,
@@ -66,23 +66,48 @@ export const PROFILE_LABELS = {
   ie: "IE",
 };
 
+function clamp(n, min, max, fallback) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, v));
+}
+
 export function normalizeSettings(raw = {}) {
   const merged = { ...DEFAULTS, ...raw };
   // Keep accelerationScale / accelerationMax in sync (UI uses "Acceleration scale")
   if (raw.accelerationScale != null && raw.accelerationMax == null) {
     merged.accelerationMax = Number(raw.accelerationScale);
   }
-  merged.accelerationScale = Number(merged.accelerationMax);
-  merged.stepSize = Number(merged.stepSize);
-  merged.animationTime = Number(merged.animationTime);
-  merged.accelerationDelta = Number(merged.accelerationDelta);
-  merged.pulseScale = Number(merged.pulseScale);
-  merged.arrowScroll = Number(merged.arrowScroll);
-  merged.frameRate = Number(merged.frameRate) || DEFAULTS.frameRate;
+  merged.accelerationMax = clamp(
+    merged.accelerationMax,
+    1,
+    10,
+    DEFAULTS.accelerationMax
+  );
+  merged.accelerationScale = merged.accelerationMax;
+  merged.stepSize = clamp(merged.stepSize, 1, 1000, DEFAULTS.stepSize);
+  merged.animationTime = clamp(
+    merged.animationTime,
+    50,
+    2000,
+    DEFAULTS.animationTime
+  );
+  merged.accelerationDelta = clamp(
+    merged.accelerationDelta,
+    1,
+    500,
+    DEFAULTS.accelerationDelta
+  );
+  merged.pulseScale = clamp(merged.pulseScale, 0.5, 20, DEFAULTS.pulseScale);
+  merged.arrowScroll = clamp(merged.arrowScroll, 1, 500, DEFAULTS.arrowScroll);
+  merged.frameRate = clamp(merged.frameRate, 30, 240, DEFAULTS.frameRate);
   merged.keyboardSupport = Boolean(merged.keyboardSupport);
   merged.touchpadSupport = Boolean(merged.touchpadSupport);
   merged.pulseAlgorithm = Boolean(merged.pulseAlgorithm);
   merged.middleMouse = Boolean(merged.middleMouse);
+  // Only allow known profile keys
+  const profile = String(merged.profile || "default").toLowerCase();
+  merged.profile = PROFILE_ORDER.includes(profile) ? profile : "custom";
   return merged;
 }
 
