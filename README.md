@@ -26,6 +26,7 @@ Inspired by the product feel of [SmoothScroll](https://smoothscroll.net/) (setti
 - Smooth **same-document anchor / TOC** jumps (`a[href^="#"]`, hashchange, `scrollIntoView`)
 - **Bypasses** YouTube Shorts / Instagram·Facebook Reels / TikTok and CSS `scroll-snap` feeds so native swipe works
 - **Perf:** MAIN-world bridge disabled on Facebook/IG/YT and other heavy SPAs; overflow ancestor caching; bounded impulse queue
+- **Modals / dialogs:** wheel prefers nested overflow inside `[role=dialog]` / `aria-modal` layers (incl. Facebook post modals) instead of treating fixed panes as chrome
 - Middle-mouse **click-to-toggle autoscroll** (direct pixels, not pulse queue)
 - Intercepts `wheel` early (`capture` + `{passive:false}`) on all frames
 - Scrolls nested overflow containers, then bubbles at edges

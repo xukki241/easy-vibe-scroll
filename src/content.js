@@ -187,10 +187,61 @@
   }
 
   /**
+   * Dialog / layer / portal roots — their overflow often uses position:fixed
+   * and sits deeper than the heavy-SPA shallow walk.
+   * @param {Element|null} el
+   */
+  function isModalLayerNode(el) {
+    if (!el || el.nodeType !== 1 || !el.getAttribute) return false;
+    try {
+      const role = el.getAttribute("role");
+      if (role === "dialog" || role === "alertdialog") return true;
+      if (el.getAttribute("aria-modal") === "true") return true;
+    } catch (_) {
+      return false;
+    }
+    return false;
+  }
+
+  /**
+   * @param {Element|null} el
+   * @param {number} [maxHops]
+   */
+  function closestModalLayer(el, maxHops) {
+    let node = el;
+    const limit = maxHops == null ? 48 : maxHops;
+    for (let i = 0; i < limit && node && node.nodeType === 1; i++) {
+      if (isModalLayerNode(node)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /** Body/html overflow lock typical of open modal layers. */
+  function isDocumentScrollLocked() {
+    try {
+      const body = document.body;
+      const html = document.documentElement;
+      if (!body || !html) return false;
+      const bs = getComputedStyle(body);
+      const hs = getComputedStyle(html);
+      return (
+        bs.overflow === "hidden" ||
+        bs.overflowY === "hidden" ||
+        hs.overflow === "hidden" ||
+        hs.overflowY === "hidden"
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
    * @param {Element} node
    * @param {'x'|'y'|'either'} [axis]
+   * @param {{ allowFixed?: boolean }} [opts]
    */
-  function isScrollable(node, axis) {
+  function isScrollable(node, axis, opts) {
     if (!node || node.nodeType !== 1) return false;
     const dy = node.clientHeight + 10 < node.scrollHeight;
     const dx = node.clientWidth + 10 < node.scrollWidth;
@@ -202,8 +253,11 @@
     } catch (_) {
       return false;
     }
-    // Fixed chrome (sticky footers/headers) rarely owns page scroll
-    if (style.position === "fixed") return false;
+    // Fixed chrome (sticky footers/headers) rarely owns page scroll —
+    // but dialog/layer scrollers commonly use position:fixed.
+    if (style.position === "fixed" && !(opts && opts.allowFixed)) {
+      return false;
+    }
     const canY = dy && overflowAllows(style.overflowY);
     const canX = dx && overflowAllows(style.overflowX);
     if (axis === "y") return canY;
@@ -246,9 +300,17 @@
     if (el.nodeType === 3) el = el.parentElement;
 
     const flags = getHostFlags();
-    // Heavy SPAs: shallow walk. Long marketing pages: full walk but axis-aware
-    // so horizontal carousels / overflow-x strips don't steal vertical wheel.
-    const maxDepth = flags.heavySpa ? 6 : 48;
+    // Prefer nested overflow inside dialogs/layers even on heavy SPAs.
+    // Feed paths stay shallow; open modals (role=dialog / scroll-lock) go deep.
+    // Attribute walk is cheap — always allow enough hops for portal trees.
+    const modalRoot = closestModalLayer(el, 48);
+    const inModalLayer = Boolean(modalRoot) || isDocumentScrollLocked();
+    const allowFixed = inModalLayer;
+    // Heavy SPAs: shallow walk. Modals/layers: full walk. Marketing: full walk
+    // axis-aware so horizontal carousels don't steal vertical wheel.
+    const maxDepth = inModalLayer ? 48 : flags.heavySpa ? 6 : 48;
+    const scrollAxis = axisKey === "either" ? "either" : axisKey;
+    const scrollOpts = allowFixed ? { allowFixed: true } : undefined;
     let node = el;
     let depth = 0;
     while (
@@ -258,24 +320,39 @@
       node !== document &&
       depth < maxDepth
     ) {
-      if (isScrollable(node, axisKey === "either" ? "either" : axisKey)) {
+      if (isScrollable(node, scrollAxis, scrollOpts)) {
         overflowCacheEl = el;
         overflowCacheResult = { node, _ssfAxis: axisKey };
         overflowCacheAt = t;
         return node;
       }
+      // Stop at the dialog root once past its inner scroller (avoid walking
+      // out into the locked document and treating the page as the target).
+      if (modalRoot && node === modalRoot) break;
       node = node.parentElement;
       depth++;
     }
 
     if (isFrame) {
-      if (isScrollable(body, axisKey === "either" ? "either" : axisKey)) {
+      if (isScrollable(body, scrollAxis, scrollOpts)) {
         return body;
       }
-      if (isScrollable(html, axisKey === "either" ? "either" : axisKey)) {
+      if (isScrollable(html, scrollAxis, scrollOpts)) {
         return html;
       }
       return documentScroller();
+    }
+
+    // Inside a modal with no nested scroller found: still prefer the modal
+    // root if it itself overflows (fixed dialog pane) over the locked page.
+    if (
+      modalRoot &&
+      isScrollable(modalRoot, scrollAxis, { allowFixed: true })
+    ) {
+      overflowCacheEl = el;
+      overflowCacheResult = { node: modalRoot, _ssfAxis: axisKey };
+      overflowCacheAt = t;
+      return modalRoot;
     }
 
     const scroller = documentScroller();
@@ -877,6 +954,8 @@
 
     // If nested container can't move further, bubble to parent/document
     const scroller = climbIfAtEdge(elem, x, y, axis);
+    // Wrong target (locked body + missed dialog scroller) must not swallow wheel
+    if (!canScrollInDirection(scroller, x, y)) return;
     event.preventDefault();
     scrollArray(scroller, x, y);
   }
