@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Modal scroll fixture</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 200vh;
+        font: 14px/1.4 system-ui, sans-serif;
+      }
+      #page {
+        padding: 24px;
+      }
+      #backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 10;
+      }
+      #dialog {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 360px;
+        height: 320px;
+        z-index: 11;
+        background: #fff;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid #ccc;
+      }
+      #dialog-scroller {
+        flex: 1 1 auto;
+        overflow: auto;
+        min-height: 0;
+        padding: 12px;
+      }
+      #fixed-dialog {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        width: 280px;
+        height: 220px;
+        z-index: 12;
+        overflow: auto;
+        background: #f7fafc;
+        border: 1px solid #999;
+        padding: 10px;
+      }
+    </style>
+  </head>
+  <body style="overflow: hidden">
+    <div id="page">Background page (scroll-locked).</div>
+    <div id="backdrop"></div>
+    <div id="dialog" role="dialog" aria-modal="true" aria-label="Post">
+      <div style="padding: 8px 12px; border-bottom: 1px solid #ddd">Header</div>
+      <div id="dialog-scroller"></div>
+    </div>
+    <div id="fixed-dialog" role="dialog" aria-modal="true" aria-label="Fixed pane"></div>
+    <script>
+      window.chrome = {
+        runtime: { lastError: null },
+        storage: {
+          sync: {
+            get: (defaults, cb) => cb(Object.assign({}, defaults)),
+          },
+          local: {
+            get: (defaults, cb) => cb(Object.assign({}, defaults)),
+          },
+          onChanged: { addListener: function () {} },
+        },
+      };
+    </script>
+    <script src="../src/content.js"></script>
+    <script>
+      (function () {
+        function fill(el, n, prefix) {
+          let host = el;
+          for (let d = 0; d < 14; d++) {
+            const wrap = document.createElement("div");
+            wrap.dataset.depth = String(d);
+            host.appendChild(wrap);
+            host = wrap;
+          }
+          for (let i = 1; i <= n; i++) {
+            const p = document.createElement("p");
+            p.textContent = prefix + " " + i;
+            host.appendChild(p);
+          }
+        }
+        fill(document.getElementById("dialog-scroller"), 50, "Comment");
+        fill(document.getElementById("fixed-dialog"), 40, "Fixed-line");
+        window.__ssfFixtureReady = true;
+      })();
+    </script>
+  </body>
+</html>

@@ -185,7 +185,104 @@
           <p>Line 19</p>
           <p>Line 20 — end of nested content.</p>
         </div>
+        <p style="margin-top: 14px">
+          <button type="button" id="open-dialog" style="font: 600 13px system-ui, sans-serif; padding: 8px 12px">
+            Open dialog (modal scroll test)
+          </button>
+        </p>
       </section>
+
+      <div
+        id="demo-backdrop"
+        hidden
+        style="
+          position: fixed;
+          inset: 0;
+          z-index: 20;
+          background: rgba(20, 24, 30, 0.45);
+          display: grid;
+          place-items: center;
+        "
+      >
+        <div
+          id="demo-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="demo-dialog-title"
+          style="
+            position: fixed;
+            z-index: 21;
+            width: min(420px, 92vw);
+            max-height: min(420px, 70vh);
+            display: flex;
+            flex-direction: column;
+            background: #fff;
+            border: 1px solid var(--line);
+            box-shadow: 0 16px 40px rgba(20, 24, 30, 0.25);
+          "
+        >
+          <div
+            style="
+              flex: 0 0 auto;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 12px;
+              padding: 12px 14px;
+              border-bottom: 1px solid var(--line);
+              font: 600 14px system-ui, sans-serif;
+            "
+          >
+            <span id="demo-dialog-title">Post comments</span>
+            <button type="button" id="close-dialog" aria-label="Close" style="font: 13px system-ui, sans-serif">
+              Close
+            </button>
+          </div>
+          <div
+            id="demo-dialog-scroller"
+            style="flex: 1 1 auto; overflow: auto; padding: 12px 14px; min-height: 0"
+          >
+            <p>Modal scroller — wheel here must move this pane while body is scroll-locked.</p>
+            <script>
+              (function () {
+                const scroller = document.currentScript.parentElement;
+                // Deep wrappers mimic Facebook portal/comment trees (> heavy-SPA depth 6)
+                let host = scroller;
+                for (let d = 0; d < 12; d++) {
+                  const wrap = document.createElement("div");
+                  wrap.setAttribute("data-depth", String(d));
+                  host.appendChild(wrap);
+                  host = wrap;
+                }
+                for (let i = 1; i <= 40; i++) {
+                  const p = document.createElement("p");
+                  p.textContent =
+                    "Comment " + i + " — filler so the dialog overflows.";
+                  host.appendChild(p);
+                }
+              })();
+            </script>
+          </div>
+        </div>
+      </div>
+      <script>
+        (function () {
+          const backdrop = document.getElementById("demo-backdrop");
+          const openBtn = document.getElementById("open-dialog");
+          const closeBtn = document.getElementById("close-dialog");
+          function setOpen(open) {
+            backdrop.hidden = !open;
+            document.body.style.overflow = open ? "hidden" : "";
+            backdrop.style.display = open ? "grid" : "none";
+          }
+          backdrop.style.display = "none";
+          openBtn.addEventListener("click", () => setOpen(true));
+          closeBtn.addEventListener("click", () => setOpen(false));
+          backdrop.addEventListener("click", (e) => {
+            if (e.target === backdrop) setOpen(false);
+          });
+        })();
+      </script>
 
       <section class="section tall" id="long-page">
         <h2>Long page</h2>
