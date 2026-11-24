@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Media slider wheel fixture</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 220vh;
+        font: 14px/1.45 system-ui, sans-serif;
+        background: #0f1115;
+        color: #e8eaed;
+      }
+      #page {
+        padding: 24px;
+        max-width: 720px;
+      }
+      .player {
+        margin: 24px 0;
+        padding: 16px;
+        background: #1a1d24;
+        border: 1px solid #333;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 12px 0;
+      }
+      label {
+        min-width: 140px;
+      }
+      /* YouTube-like volume / progress chrome (class tokens only) */
+      .ytp-volume-panel {
+        width: 52px;
+        height: 48px;
+        background: #2a2f3a;
+        border: 1px solid #555;
+        position: relative;
+        cursor: ns-resize;
+      }
+      .ytp-volume-slider {
+        position: absolute;
+        left: 50%;
+        top: 8px;
+        bottom: 8px;
+        width: 4px;
+        margin-left: -2px;
+        background: #666;
+      }
+      .ytp-volume-slider-handle {
+        position: absolute;
+        left: 50%;
+        width: 12px;
+        height: 12px;
+        margin-left: -6px;
+        border-radius: 50%;
+        background: #fff;
+        bottom: 40%;
+      }
+      .ytp-progress-bar-container {
+        height: 28px;
+        background: #2a2f3a;
+        border: 1px solid #555;
+        cursor: ew-resize;
+        position: relative;
+      }
+      .ytp-progress-bar {
+        height: 4px;
+        margin-top: 12px;
+        background: #444;
+      }
+      .ytp-scrubber-button {
+        position: absolute;
+        top: 8px;
+        left: 35%;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #f00;
+      }
+      #log {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        background: #111;
+        border: 1px solid #333;
+        padding: 8px;
+        min-height: 4em;
+      }
+      .hint {
+        color: #9aa0a6;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="page">
+      <h1>Media slider wheel fixture</h1>
+      <p class="hint">
+        With the extension loaded, wheel over the controls below must
+        <strong>not</strong> smooth-scroll the page (no preventDefault). Wheel
+        outside the controls should still smooth-scroll.
+      </p>
+
+      <div class="player">
+        <div class="row">
+          <label for="range-vol">input[type=range]</label>
+          <input id="range-vol" type="range" min="0" max="100" value="40" />
+          <span id="range-val">40</span>
+        </div>
+
+        <div class="row">
+          <label>role=slider</label>
+          <div
+            id="aria-slider"
+            role="slider"
+            tabindex="0"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="55"
+            aria-label="Volume"
+            style="
+              width: 180px;
+              height: 28px;
+              background: #2a2f3a;
+              border: 1px solid #555;
+              position: relative;
+              cursor: ns-resize;
+            "
+          >
+            <div
+              id="aria-thumb"
+              style="
+                position: absolute;
+                left: 55%;
+                top: 4px;
+                width: 8px;
+                height: 20px;
+                background: #8ab4f8;
+              "
+            ></div>
+          </div>
+          <span id="aria-val">55</span>
+        </div>
+
+        <div class="row">
+          <label>ytp volume</label>
+          <div class="ytp-volume-panel" title="Fake YouTube volume">
+            <div class="ytp-volume-slider">
+              <div class="ytp-volume-slider-handle"></div>
+            </div>
+          </div>
+          <span id="yt-vol">70</span>
+        </div>
+
+        <div>
+          <label>ytp progress</label>
+          <div class="ytp-progress-bar-container" title="Fake YouTube seek">
+            <div class="ytp-progress-bar"></div>
+            <div class="ytp-scrubber-button"></div>
+          </div>
+          <span id="yt-seek">35%</span>
+        </div>
+      </div>
+
+      <p>Scroll filler so the document can move when wheel is not on a control.</p>
+      <div id="filler"></div>
+
+      <h2>Event log</h2>
+      <div id="log"></div>
+    </div>
+
+    <script>
+      window.chrome = {
+        runtime: { lastError: null },
+        storage: {
+          sync: {
+            get: (defaults, cb) => cb(Object.assign({}, defaults)),
+          },
+          local: {
+            get: (defaults, cb) => cb(Object.assign({}, defaults)),
+          },
+          onChanged: { addListener: function () {} },
+        },
+      };
+    </script>
+    <script src="../src/content.js"></script>
+    <script>
+      (function () {
+        const logEl = document.getElementById("log");
+        const lines = [];
+        function log(msg) {
+          lines.unshift(msg);
+          if (lines.length > 12) lines.pop();
+          logEl.textContent = lines.join("\n");
+        }
+
+        const filler = document.getElementById("filler");
+        for (let i = 0; i < 40; i++) {
+          const p = document.createElement("p");
+          p.textContent =
+            "Filler line " +
+            (i + 1) +
+            " — wheel here should smooth-scroll the page.";
+          filler.appendChild(p);
+        }
+
+        const range = document.getElementById("range-vol");
+        const rangeVal = document.getElementById("range-val");
+        range.addEventListener("input", () => {
+          rangeVal.textContent = range.value;
+        });
+        // Some browsers adjust range via wheel when focused/hovered
+        range.addEventListener(
+          "wheel",
+          (e) => {
+            const next = Number(range.value) + (e.deltaY < 0 ? 2 : -2);
+            range.value = String(Math.max(0, Math.min(100, next)));
+            rangeVal.textContent = range.value;
+            log(
+              "range wheel handled (defaultPrevented=" +
+                e.defaultPrevented +
+                ")"
+            );
+          },
+          { passive: true }
+        );
+
+        const aria = document.getElementById("aria-slider");
+        const ariaVal = document.getElementById("aria-val");
+        const ariaThumb = document.getElementById("aria-thumb");
+        function setAria(n) {
+          n = Math.max(0, Math.min(100, n));
+          aria.setAttribute("aria-valuenow", String(n));
+          ariaVal.textContent = String(n);
+          ariaThumb.style.left = n + "%";
+        }
+        aria.addEventListener(
+          "wheel",
+          (e) => {
+            setAria(Number(aria.getAttribute("aria-valuenow")) + (e.deltaY < 0 ? 3 : -3));
+            log(
+              "aria slider wheel (defaultPrevented=" + e.defaultPrevented + ")"
+            );
+          },
+          { passive: true }
+        );
+
+        const ytVol = document.getElementById("yt-vol");
+        const volPanel = document.querySelector(".ytp-volume-panel");
+        let vol = 70;
+        volPanel.addEventListener(
+          "wheel",
+          (e) => {
+            vol = Math.max(0, Math.min(100, vol + (e.deltaY < 0 ? 4 : -4)));
+            ytVol.textContent = String(vol);
+            log(
+              "ytp volume wheel (defaultPrevented=" + e.defaultPrevented + ")"
+            );
+          },
+          { passive: true }
+        );
+
+        const ytSeek = document.getElementById("yt-seek");
+        const progress = document.querySelector(".ytp-progress-bar-container");
+        let seek = 35;
+        progress.addEventListener(
+          "wheel",
+          (e) => {
+            seek = Math.max(0, Math.min(100, seek + (e.deltaY < 0 ? 2 : -2)));
+            ytSeek.textContent = seek + "%";
+            document.querySelector(".ytp-scrubber-button").style.left =
+              seek + "%";
+            log(
+              "ytp progress wheel (defaultPrevented=" + e.defaultPrevented + ")"
+            );
+          },
+          { passive: true }
+        );
+
+        window.addEventListener(
+          "wheel",
+          (e) => {
+            if (e.defaultPrevented) {
+              log("page wheel defaultPrevented (extension claimed scroll)");
+            }
+          },
+          { capture: false, passive: true }
+        );
+      })();
+    </script>
+  </body>
+</html>

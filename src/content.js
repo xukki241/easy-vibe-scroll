@@ -834,6 +834,63 @@
     return false;
   }
 
+  /**
+   * Media player chrome / range / ARIA sliders — sites often map wheel to
+   * volume or seek. Leave the event alone (no preventDefault), same idea as
+   * Shorts/Reels bypass. Prefer standards (range, role=slider) plus tight
+   * class/id tokens for player kits (incl. YouTube ytp-volume / progress).
+   * @param {Element|null} el
+   */
+  function isMediaSliderControl(el) {
+    let node = el;
+    for (let i = 0; i < 12 && node && node.nodeType === 1; i++) {
+      if (isNodeName(node, "input")) {
+        const type = (
+          node.type ||
+          (node.getAttribute && node.getAttribute("type")) ||
+          ""
+        ).toLowerCase();
+        if (type === "range") return true;
+      }
+      try {
+        const role = (node.getAttribute("role") || "").toLowerCase();
+        if (role === "slider") return true;
+      } catch (_) {
+        /* ignore */
+      }
+
+      let token = "";
+      try {
+        if (typeof node.className === "string") token += node.className;
+        else if (node.getAttribute)
+          token += node.getAttribute("class") || "";
+        if (node.id) token += " " + node.id;
+      } catch (_) {
+        /* ignore */
+      }
+      if (token) {
+        // YouTube HTML5 player chrome (volume + seek scrubber)
+        if (
+          /\b(ytp-volume-panel|ytp-volume-slider|ytp-volume-control|ytp-progress-bar|ytp-progress-list|ytp-scrubber|ytp-timed-markers)\b/i.test(
+            token
+          )
+        ) {
+          return true;
+        }
+        // Common video-player scrubber / volume chrome class tokens
+        if (
+          /\b(volume|progress|seek|scrubber|timeline|playback)[-_]?(bar|slider|panel|track|control|rail)\b/i.test(
+            token
+          )
+        ) {
+          return true;
+        }
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
   function onBridgeScroll(event) {
     if (!enabled) return;
     // Bridge is not installed on heavy SPAs; ignore stray events
@@ -927,6 +984,8 @@
 
     // Shorts / Reels / scroll-snap feeds: do not preventDefault — native snap wins
     if (shouldBypassSmooth(target)) return;
+    // Volume / seek / range sliders: let the page handle wheel (e.g. YouTube)
+    if (isMediaSliderControl(target)) return;
 
     const { deltaX, deltaY, sample } = normalizeWheel(event);
 
@@ -1169,6 +1228,7 @@
     if (event.button !== 1 || !options.middleMouse) return;
     if (isEditable(event.target)) return;
     if (shouldBypassSmooth(event.target)) return;
+    if (isMediaSliderControl(event.target)) return;
 
     // Click-to-toggle autoscroll (direct applyScroll — not pulse queue)
     event.preventDefault();
