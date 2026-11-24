@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Shorts / Reels snap bypass fixture</title>
+    <style>
+      body {
+        margin: 0;
+        font: 14px/1.45 system-ui, sans-serif;
+        background: #0f1115;
+        color: #e8eaed;
+      }
+      #page {
+        padding: 24px;
+        max-width: 720px;
+      }
+      .hint {
+        color: #9aa0a6;
+        font-size: 13px;
+      }
+      .panel {
+        margin: 20px 0;
+        padding: 16px;
+        background: #1a1d24;
+        border: 1px solid #333;
+      }
+      /* Fake YouTube Shorts custom element host */
+      ytd-shorts,
+      ytd-reel-video-renderer {
+        display: block;
+        height: 280px;
+        overflow-y: auto;
+        scroll-snap-type: y mandatory;
+        border: 1px solid #3d4450;
+        background: #12151c;
+      }
+      ytd-shorts .slide,
+      ytd-reel-video-renderer .slide {
+        height: 280px;
+        scroll-snap-align: start;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-bottom: 1px solid #2a2f3a;
+      }
+      /* Fake FB Reels viewer dialog chrome */
+      .reels-dialog {
+        height: 280px;
+        overflow-y: auto;
+        scroll-snap-type: y mandatory;
+        border: 1px solid #3d4450;
+        background: #12151c;
+        position: relative;
+      }
+      .reels-dialog .slide {
+        height: 280px;
+        scroll-snap-align: start;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .reels-nav {
+        position: absolute;
+        right: 12px;
+        top: 40%;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        z-index: 2;
+      }
+      .reels-nav button {
+        background: #2a2f3a;
+        color: #e8eaed;
+        border: 1px solid #555;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+      #filler {
+        min-height: 120vh;
+        margin-top: 24px;
+        padding: 16px;
+        background: #151820;
+        border: 1px dashed #333;
+      }
+      #log {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        background: #111;
+        border: 1px solid #333;
+        padding: 8px;
+        min-height: 5em;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="page">
+      <h1>Shorts / Reels snap bypass fixture</h1>
+      <p class="hint">
+        Load the extension, then wheel (and press ↑/↓) over the snap surfaces
+        below. Logs should show <code>defaultPrevented=false</code> on those
+        targets. Wheel on the filler page area should still smooth-scroll
+        (<code>defaultPrevented=true</code> when the extension claims it).
+      </p>
+
+      <div class="panel">
+        <h2>YouTube-like <code>ytd-shorts</code></h2>
+        <ytd-shorts id="shorts-container">
+          <div class="slide">Short A</div>
+          <div class="slide">Short B</div>
+          <div class="slide">Short C</div>
+        </ytd-shorts>
+      </div>
+
+      <div class="panel">
+        <h2>YouTube-like <code>ytd-reel-video-renderer</code></h2>
+        <ytd-reel-video-renderer>
+          <div class="slide">Reel A</div>
+          <div class="slide">Reel B</div>
+        </ytd-reel-video-renderer>
+      </div>
+
+      <div class="panel">
+        <h2>Facebook-like Reels dialog chrome</h2>
+        <div
+          class="reels-dialog"
+          role="dialog"
+          aria-modal="true"
+          id="reel_feed"
+        >
+          <div class="reels-nav">
+            <button type="button" aria-label="Previous Card">↑</button>
+            <button type="button" aria-label="Next Card">↓</button>
+          </div>
+          <div class="slide">FB Reel 1</div>
+          <div class="slide">FB Reel 2</div>
+          <div class="slide">FB Reel 3</div>
+        </div>
+      </div>
+
+      <div id="filler">
+        <strong>Filler page scroll</strong> — wheel here should still be
+        claimed by Smooth Scroll Free (smooth pulse), proving modal/slider
+        bypasses did not disable capture globally.
+      </div>
+
+      <h2>Event log</h2>
+      <div id="log"></div>
+    </div>
+
+    <script>
+      const logEl = document.getElementById("log");
+      const lines = [];
+      function log(msg) {
+        lines.unshift(msg);
+        while (lines.length > 14) lines.pop();
+        logEl.textContent = lines.join("\n");
+      }
+
+      function describe(target) {
+        if (!target || target.nodeType !== 1) return String(target);
+        const tag = target.tagName.toLowerCase();
+        const id = target.id ? "#" + target.id : "";
+        const label = target.getAttribute && target.getAttribute("aria-label");
+        return tag + id + (label ? '[' + label + ']' : "");
+      }
+
+      window.addEventListener(
+        "wheel",
+        (e) => {
+          log(
+            "wheel → " +
+              describe(e.target) +
+              " defaultPrevented=" +
+              e.defaultPrevented +
+              " deltaY=" +
+              e.deltaY
+          );
+        },
+        true
+      );
+
+      window.addEventListener(
+        "keydown",
+        (e) => {
+          if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== " ")
+            return;
+          log(
+            "keydown " +
+              e.key +
+              " → " +
+              describe(e.target) +
+              " defaultPrevented=" +
+              e.defaultPrevented
+          );
+        },
+        true
+      );
+    </script>
+  </body>
+</html>

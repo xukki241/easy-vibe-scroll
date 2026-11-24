@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Smooth Scroll Free",
   "short_name": "SmoothScroll",
-  "version": "1.3.5",
+  "version": "1.3.6",
   "description": "Free, open-source smooth mouse-wheel and in-page anchor scrolling with pulse easing. MIT licensed clean-room reimplementation inspired by the SmoothScroll UX.",
   "author": "Nguyễn Xuân Kiên",
   "homepage_url": "https://github.com/xukki241/smooth-scroll",
