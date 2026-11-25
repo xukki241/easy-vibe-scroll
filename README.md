@@ -24,9 +24,10 @@ Inspired by the product feel of [SmoothScroll](https://smoothscroll.net/) (setti
 
 - Smooth wheel scrolling with optional **pulse algorithm** (Herf-style impulse)
 - Smooth **same-document anchor / TOC** jumps (`a[href^="#"]`, hashchange, `scrollIntoView`)
-- **Bypasses** YouTube Shorts / Instagram·Facebook Reels / TikTok and CSS `scroll-snap` feeds so native swipe works
+- **Bypasses** YouTube Shorts / Instagram·Facebook Reels / TikTok and CSS `scroll-snap` feeds so native swipe works (path + DOM: custom elements, Reels viewer chrome; cancels leftover pulse on SPA entry)
+- **Bypasses** media sliders / range / ARIA `role=slider` (and YouTube volume/progress chrome) so wheel can change volume or seek instead of scrolling the page
 - **Perf:** MAIN-world bridge disabled on Facebook/IG/YT and other heavy SPAs; overflow ancestor caching; bounded impulse queue
-- **Modals / dialogs:** wheel prefers nested overflow inside `[role=dialog]` / `aria-modal` layers (incl. Facebook post modals) instead of treating fixed panes as chrome
+- **Modals / dialogs:** wheel prefers nested overflow inside `[role=dialog]` / `aria-modal` layers (incl. Facebook post modals) instead of treating fixed panes as chrome — Reels/Shorts snap surfaces still win over modal capture
 - Middle-mouse **click-to-toggle autoscroll** (direct pixels, not pulse queue)
 - Intercepts `wheel` early (`capture` + `{passive:false}`) on all frames
 - Scrolls nested overflow containers, then bubbles at edges
@@ -50,7 +51,7 @@ Inspired by the product feel of [SmoothScroll](https://smoothscroll.net/) (setti
 
 ## Test page
 
-Open `test/scroll-demo.html` after loading the extension to compare page + nested overflow wheel feel and Contents `#hash` links.
+Open `test/scroll-demo.html` after loading the extension to compare page + nested overflow wheel feel and Contents `#hash` links. Use `test/media-slider-wheel-fixture.html` to confirm wheel over range / ARIA slider / fake YouTube volume·progress does not steal the event. Use `test/shorts-reels-snap-fixture.html` to confirm wheel/keys on a fake Shorts/Reels snap surface are not `preventDefault`’d.
 
 ## Project layout
 
@@ -63,6 +64,9 @@ src/page-bridge.js     MAIN-world scrollIntoView / smooth scrollTo bridge
 src/background.js      Service worker
 src/defaults.js        Defaults & profiles
 test/scroll-demo.html  Manual feel check (wheel + TOC anchors)
+test/media-slider-wheel-fixture.html  Volume/seek slider wheel bypass check
+test/shorts-reels-snap-fixture.html  Shorts/Reels native snap bypass check
+test/modal-scroll-fixture.html  Dialog / modal nested scroll check
 icons/                 Extension icons
 ```
 

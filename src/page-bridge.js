@@ -38,6 +38,7 @@
   function isSnapFeedPath() {
     try {
       const path = location.pathname || "";
+      const search = location.search || "";
       if (
         hostEndsWith("youtube.com") ||
         hostEndsWith("youtube-nocookie.com")
@@ -49,6 +50,7 @@
       }
       if (hostEndsWith("facebook.com") || hostEndsWith("fb.com")) {
         if (/\/(reel|reels|share\/r)\b/i.test(path)) return true;
+        if (/[?&]sk=reels_tab\b/i.test(search)) return true;
       }
       if (hostEndsWith("tiktok.com")) return true;
     } catch (_) {

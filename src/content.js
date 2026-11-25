@@ -51,8 +51,12 @@
   let stickyPadAt = 0;
   let hostFlags = null; // lazy { heavySpa, snapPath }
   let cssSmoothDepth = 0;
+  let reelsDialogCacheEl = null;
+  let reelsDialogCacheAt = 0;
+  let reelsDialogCacheHit = false;
   const MAX_QUE = 4;
   const OVERFLOW_CACHE_MS = 320;
+  const REELS_DIALOG_CACHE_MS = 500;
 
   const KEY = {
     left: 37,
@@ -106,6 +110,29 @@
     return h === suffix || h.endsWith("." + suffix);
   }
 
+  function isSnapFeedPath() {
+    const path = location.pathname || "";
+    const search = location.search || "";
+    if (
+      hostEndsWith("youtube.com") ||
+      hostEndsWith("youtube-nocookie.com")
+    ) {
+      // /shorts, /shorts/ID — also allow trailing slash-only tab
+      return /^\/shorts\b/i.test(path);
+    }
+    if (hostEndsWith("instagram.com")) {
+      return /\/(reels?|stories)\b/i.test(path);
+    }
+    if (hostEndsWith("facebook.com") || hostEndsWith("fb.com")) {
+      // /reel/ID, /reels, /share/r/…, profile ?sk=reels_tab
+      if (/\/(reel|reels|share\/r)\b/i.test(path)) return true;
+      if (/[?&]sk=reels_tab\b/i.test(search)) return true;
+      return false;
+    }
+    if (hostEndsWith("tiktok.com")) return true;
+    return false;
+  }
+
   function getHostFlags() {
     // Cache only host classification; re-read pathname (cheap) for Shorts/Reels
     if (!hostFlags) {
@@ -126,21 +153,7 @@
           hostEndsWith("tumblr.com"),
       };
     }
-    const path = location.pathname || "";
-    let snapPath = false;
-    if (
-      hostEndsWith("youtube.com") ||
-      hostEndsWith("youtube-nocookie.com")
-    ) {
-      snapPath = /^\/shorts\b/i.test(path);
-    } else if (hostEndsWith("instagram.com")) {
-      snapPath = /\/(reels?|stories)\b/i.test(path);
-    } else if (hostEndsWith("facebook.com") || hostEndsWith("fb.com")) {
-      snapPath = /\/(reel|reels|share\/r)\b/i.test(path);
-    } else if (hostEndsWith("tiktok.com")) {
-      snapPath = true;
-    }
-    return { heavySpa: hostFlags.heavySpa, snapPath };
+    return { heavySpa: hostFlags.heavySpa, snapPath: isSnapFeedPath() };
   }
 
   function isNodeName(el, tag) {
@@ -800,37 +813,171 @@
     navigateToHash(location.hash, { updateHistory: false });
   }
 
+  function isReelsNavLabel(label) {
+    if (!label) return false;
+    return (
+      /\b(next|previous)\s+(card|reel)\b/i.test(label) ||
+      /\breels?\s+viewer\b/i.test(label)
+    );
+  }
+
+  /**
+   * FB Reels overlay keeps a feed URL; Next/Previous Card buttons are often
+   * siblings of the video, not ancestors — peek inside the dialog (cached).
+   * @param {Element|null} dialog
+   */
+  function dialogLooksLikeReelsViewer(dialog) {
+    if (!dialog || !dialog.querySelectorAll) return false;
+    const t = now();
+    if (
+      dialog === reelsDialogCacheEl &&
+      t - reelsDialogCacheAt < REELS_DIALOG_CACHE_MS
+    ) {
+      return reelsDialogCacheHit;
+    }
+    let hit = false;
+    try {
+      const nodes = dialog.querySelectorAll("[aria-label]");
+      const limit = Math.min(nodes.length, 48);
+      for (let i = 0; i < limit; i++) {
+        if (isReelsNavLabel(nodes[i].getAttribute("aria-label") || "")) {
+          hit = true;
+          break;
+        }
+      }
+    } catch (_) {
+      hit = false;
+    }
+    reelsDialogCacheEl = dialog;
+    reelsDialogCacheAt = t;
+    reelsDialogCacheHit = hit;
+    return hit;
+  }
+
+  /**
+   * Vertical snap / Shorts / Reels surface under the event target.
+   * Cheap tag/id/aria checks first. getComputedStyle(scroll-snap) on
+   * marketing pages always; on heavy SPAs only inside a dialog/layer
+   * (FB Reels overlay) so home-feed wheels stay cheap.
+   * @param {Element|null} el
+   */
   function hasSnapAncestor(el) {
-    // Cheap tag/id checks first; getComputedStyle only a few levels
+    const heavy = getHostFlags().heavySpa;
+    const modalRoot = closestModalLayer(el, 16);
+    const allowStyleSnap = !heavy || Boolean(modalRoot);
     let node = el;
-    for (let i = 0; i < 8 && node && node.nodeType === 1; i++) {
+    for (let i = 0; i < 16 && node && node.nodeType === 1; i++) {
       const tag = node.tagName || "";
-      if (/SHORTS/i.test(tag)) return true;
-      const id = node.id || "";
+      // YouTube (and similar) custom elements: YTD-SHORTS, YTD-REEL-VIDEO-RENDERER
+      if (tag.indexOf("-") !== -1 && /SHORTS|REEL/i.test(tag)) return true;
+      if (/^SHORTS\b/i.test(tag)) return true;
+
+      const id = (node.id || "").toLowerCase();
       if (
         id === "shorts-container" ||
         id === "shorts-inner-container" ||
-        id === "reel_feed"
+        id === "reel_feed" ||
+        id === "shorts-player" ||
+        (id.indexOf("shorts") !== -1 && id.indexOf("container") !== -1)
       ) {
         return true;
       }
+
+      // Facebook Reels viewer chrome on the ancestor chain (rare but cheap)
       try {
-        const snap = getComputedStyle(node).scrollSnapType;
-        if (snap && snap !== "none") return true;
+        if (isReelsNavLabel(node.getAttribute("aria-label") || "")) return true;
       } catch (_) {
         /* ignore */
       }
+
+      if (allowStyleSnap) {
+        try {
+          const snap = getComputedStyle(node).scrollSnapType;
+          if (snap && snap !== "none") return true;
+        } catch (_) {
+          /* ignore */
+        }
+      }
       node = node.parentElement;
     }
+    // Dialog-scoped Reels chrome (nav buttons are usually siblings of video)
+    if (modalRoot && dialogLooksLikeReelsViewer(modalRoot)) return true;
     return false;
   }
 
+  /**
+   * Leave native wheel / keys alone on Shorts·Reels·TikTok / scroll-snap.
+   * Also cancels any leftover Herf pulse (SPA navigated from a smooth page).
+   * @param {Element|null} target
+   */
   function shouldBypassSmooth(target) {
     const flags = getHostFlags();
     if (flags.snapPath) return true;
-    // Avoid deep snap walks on Facebook/etc. home feeds (path already not snap)
-    if (flags.heavySpa) return false;
+    // Cheap DOM walk — required on heavy SPAs so FB Reels dialogs / YT Shorts
+    // shelves still bypass when the URL is still the home feed.
     if (target && hasSnapAncestor(target)) return true;
+    return false;
+  }
+
+  /** Stop pulse + restore CSS scroll-behavior before yielding to native snap. */
+  function releaseToNativeSnap() {
+    if (pending || que.length) cancelAnimation();
+  }
+
+  /**
+   * Media player chrome / range / ARIA sliders — sites often map wheel to
+   * volume or seek. Leave the event alone (no preventDefault), same idea as
+   * Shorts/Reels bypass. Prefer standards (range, role=slider) plus tight
+   * class/id tokens for player kits (incl. YouTube ytp-volume / progress).
+   * @param {Element|null} el
+   */
+  function isMediaSliderControl(el) {
+    let node = el;
+    for (let i = 0; i < 12 && node && node.nodeType === 1; i++) {
+      if (isNodeName(node, "input")) {
+        const type = (
+          node.type ||
+          (node.getAttribute && node.getAttribute("type")) ||
+          ""
+        ).toLowerCase();
+        if (type === "range") return true;
+      }
+      try {
+        const role = (node.getAttribute("role") || "").toLowerCase();
+        if (role === "slider") return true;
+      } catch (_) {
+        /* ignore */
+      }
+
+      let token = "";
+      try {
+        if (typeof node.className === "string") token += node.className;
+        else if (node.getAttribute)
+          token += node.getAttribute("class") || "";
+        if (node.id) token += " " + node.id;
+      } catch (_) {
+        /* ignore */
+      }
+      if (token) {
+        // YouTube HTML5 player chrome (volume + seek scrubber)
+        if (
+          /\b(ytp-volume-panel|ytp-volume-slider|ytp-volume-control|ytp-progress-bar|ytp-progress-list|ytp-scrubber|ytp-timed-markers)\b/i.test(
+            token
+          )
+        ) {
+          return true;
+        }
+        // Common video-player scrubber / volume chrome class tokens
+        if (
+          /\b(volume|progress|seek|scrubber|timeline|playback)[-_]?(bar|slider|panel|track|control|rail)\b/i.test(
+            token
+          )
+        ) {
+          return true;
+        }
+      }
+      node = node.parentElement;
+    }
     return false;
   }
 
@@ -926,7 +1073,12 @@
     }
 
     // Shorts / Reels / scroll-snap feeds: do not preventDefault — native snap wins
-    if (shouldBypassSmooth(target)) return;
+    if (shouldBypassSmooth(target)) {
+      releaseToNativeSnap();
+      return;
+    }
+    // Volume / seek / range sliders: let the page handle wheel (e.g. YouTube)
+    if (isMediaSliderControl(target)) return;
 
     const { deltaX, deltaY, sample } = normalizeWheel(event);
 
@@ -1031,6 +1183,14 @@
       isEditable(document.activeElement) ||
       event.defaultPrevented
     ) {
+      return;
+    }
+
+    // Shorts / Reels: arrow / space must stay native (no preventDefault / pulse)
+    let keyTarget = target;
+    if (keyTarget && keyTarget.nodeType === 3) keyTarget = keyTarget.parentElement;
+    if (shouldBypassSmooth(keyTarget || activeElement)) {
+      releaseToNativeSnap();
       return;
     }
 
@@ -1168,7 +1328,11 @@
     activeElement = event.target;
     if (event.button !== 1 || !options.middleMouse) return;
     if (isEditable(event.target)) return;
-    if (shouldBypassSmooth(event.target)) return;
+    if (shouldBypassSmooth(event.target)) {
+      releaseToNativeSnap();
+      return;
+    }
+    if (isMediaSliderControl(event.target)) return;
 
     // Click-to-toggle autoscroll (direct applyScroll — not pulse queue)
     event.preventDefault();
